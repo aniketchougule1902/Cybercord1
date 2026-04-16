@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import dns from "dns";
 import { promisify } from "util";
+import tls from "tls";
 import whois from "whois-json";
 import axios from "axios";
 import { parsePhoneNumberFromString, isValidPhoneNumber } from 'libphonenumber-js';
