@@ -1,0 +1,7 @@
+{
+  "name": "CyberCord",
+  "description": "AI-first OSINT & Ethical Hacking Platform for unified investigations and threat intelligence.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
