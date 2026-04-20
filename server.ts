@@ -411,11 +411,18 @@ async function startServer() {
         case 'wayback':
           reportType = "WAYBACK_ARCHIVE";
           try {
-            const wbTarget = encodeURIComponent(target);
-            const wbRes = await axios.get(`http://web.archive.org/cdx/search/cdx?url=${wbTarget}&output=json&limit=20&fl=timestamp,original,statuscode,mimetype&collapse=digest`, { timeout: 12000 });
+            const cdxUrl = new URL('http://web.archive.org/cdx/search/cdx');
+            cdxUrl.searchParams.set('url', target);
+            cdxUrl.searchParams.set('output', 'json');
+            cdxUrl.searchParams.set('limit', '20');
+            cdxUrl.searchParams.set('fl', 'timestamp,original,statuscode,mimetype');
+            cdxUrl.searchParams.set('collapse', 'digest');
+            const wbRes = await axios.get(cdxUrl.toString(), { timeout: 12000 });
             const rows = Array.isArray(wbRes.data) ? wbRes.data.slice(1) : [];
             const snapshots = rows.map((r: string[]) => ({ timestamp: r[0], url: r[1], status: r[2], type: r[3], archive_url: `https://web.archive.org/web/${encodeURIComponent(r[0])}/${encodeURIComponent(r[1])}` }));
-            const availRes = await axios.get(`https://archive.org/wayback/available?url=${wbTarget}`, { timeout: 8000 }).catch(() => null);
+            const availUrl = new URL('https://archive.org/wayback/available');
+            availUrl.searchParams.set('url', target);
+            const availRes = await axios.get(availUrl.toString(), { timeout: 8000 }).catch(() => null);
             data = { target, total_snapshots: snapshots.length, snapshots, closest: availRes?.data?.archived_snapshots?.closest || null };
           } catch (e: any) { data = { target, error: e.message, snapshots: [] }; }
           break;
@@ -442,8 +449,12 @@ async function startServer() {
           try {
             const ghUsername = target.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 39);
             if (!ghUsername) throw new Error('Invalid GitHub username format.');
-            const ghApiUrl = `https://api.github.com/users/${ghUsername}/repos?per_page=5&sort=updated&type=public`;
-            const ghRes = await axios.get(ghApiUrl, { timeout: 8000, headers: { 'User-Agent': 'CybercordBot/2.0', 'Accept': 'application/vnd.github.v3+json' } });
+            const ghUrl = new URL('https://api.github.com');
+            ghUrl.pathname = `/users/${ghUsername}/repos`;
+            ghUrl.searchParams.set('per_page', '5');
+            ghUrl.searchParams.set('sort', 'updated');
+            ghUrl.searchParams.set('type', 'public');
+            const ghRes = await axios.get(ghUrl.toString(), { timeout: 8000, headers: { 'User-Agent': 'CybercordBot/2.0', 'Accept': 'application/vnd.github.v3+json' } });
             const repos = Array.isArray(ghRes.data) ? ghRes.data : [];
             const commonSecretPatterns = [
               { name: 'AWS Access Key', pattern: 'AKIA[0-9A-Z]{16}' },
@@ -485,7 +496,9 @@ async function startServer() {
           const hibpKey = getApiKey('hibp', 'HIBP_API_KEY');
           if (!hibpKey) { data = { message: 'HIBP API key required. Configure in Admin > API Keys.', email: target, breaches: [] }; break; }
           try {
-            const hibpR = await axios.get(`https://haveibeenpwned.com/api/v3/breachedaccount/${encodeURIComponent(target)}`, { headers: { 'hibp-api-key': hibpKey, 'user-agent': 'Cybercord-Enterprise/2.0' }, timeout: 8000 });
+            const hibpUrl = new URL('https://haveibeenpwned.com/api/v3/breachedaccount');
+            hibpUrl.pathname += `/${encodeURIComponent(target)}`;
+            const hibpR = await axios.get(hibpUrl.toString(), { headers: { 'hibp-api-key': hibpKey, 'user-agent': 'Cybercord-Enterprise/2.0' }, timeout: 8000 });
             data = { email: target, breaches: hibpR.data || [], breach_count: hibpR.data?.length || 0 };
           } catch (err: any) {
             if (err.response?.status === 404) data = { email: target, breaches: [], breach_count: 0, message: 'No breaches found' };
