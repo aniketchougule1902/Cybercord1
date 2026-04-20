@@ -571,8 +571,14 @@ async function startServer() {
         if (!dnsData.spf_valid) timeline.push({ id: 't5', timestamp: ts(), title: 'Missing SPF Record', description: 'No SPF email authentication found', type: 'warning' });
         if (!dnsData.dmarc_valid) timeline.push({ id: 't6', timestamp: ts(), title: 'Missing DMARC Policy', description: 'No DMARC anti-spoofing policy found', type: 'warning' });
       } else if (type === 'IP') {
+        if (!/^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/.test(query)) {
+          return res.status(400).json({ error: 'Invalid IP address format' });
+        }
+        const ipApiUrl = new URL('http://ip-api.com');
+        ipApiUrl.pathname = `/json/${query}`;
+        ipApiUrl.searchParams.set('fields', 'status,message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,asname,reverse,mobile,proxy,hosting,query');
         const [geoR, ptrR, blR] = await Promise.allSettled([
-          axios.get(`http://ip-api.com/json/${query}?fields=status,message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,asname,reverse,mobile,proxy,hosting,query`, { timeout: 8000 }),
+          axios.get(ipApiUrl.toString(), { timeout: 8000 }),
           reverseDns(query).catch(() => []), checkBlacklists(query)
         ]);
         const geoData = geoR.status === 'fulfilled' ? geoR.value.data : {};
@@ -615,12 +621,19 @@ async function startServer() {
           relationships.push({ id: 'r0', source: 'e0', target: 'e1', label: 'registered in' });
         } catch { rawData = { error: 'Invalid phone number' }; }
       } else if (type === 'USERNAME') {
+        const safeUsername = query.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 50);
+        if (!safeUsername) return res.status(400).json({ error: 'Invalid username format' });
         const platforms = [
-          { name: 'GitHub', url: `https://github.com/${query}` }, { name: 'Twitter/X', url: `https://twitter.com/${query}` },
-          { name: 'Instagram', url: `https://instagram.com/${query}` }, { name: 'Reddit', url: `https://reddit.com/user/${query}` },
-          { name: 'YouTube', url: `https://youtube.com/@${query}` }, { name: 'GitLab', url: `https://gitlab.com/${query}` },
-          { name: 'TikTok', url: `https://tiktok.com/@${query}` }, { name: 'Steam', url: `https://steamcommunity.com/id/${query}` },
-          { name: 'Twitch', url: `https://twitch.tv/${query}` }, { name: 'Medium', url: `https://medium.com/@${query}` },
+          { name: 'GitHub', url: new URL(`//${safeUsername}`, 'https://github.com').toString() },
+          { name: 'Twitter/X', url: new URL(`//${safeUsername}`, 'https://twitter.com').toString() },
+          { name: 'Instagram', url: new URL(`//${safeUsername}`, 'https://instagram.com').toString() },
+          { name: 'Reddit', url: new URL(`//user/${safeUsername}`, 'https://reddit.com').toString() },
+          { name: 'YouTube', url: new URL(`//@${safeUsername}`, 'https://youtube.com').toString() },
+          { name: 'GitLab', url: new URL(`//${safeUsername}`, 'https://gitlab.com').toString() },
+          { name: 'TikTok', url: new URL(`//@${safeUsername}`, 'https://tiktok.com').toString() },
+          { name: 'Steam', url: new URL(`//id/${safeUsername}`, 'https://steamcommunity.com').toString() },
+          { name: 'Twitch', url: new URL(`//${safeUsername}`, 'https://twitch.tv').toString() },
+          { name: 'Medium', url: new URL(`//@${safeUsername}`, 'https://medium.com').toString() },
         ];
         const socialResults = await Promise.all(platforms.map(async (p) => {
           try {
