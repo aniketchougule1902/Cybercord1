@@ -1,15 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { Terminal as TerminalIcon, ChevronRight, Zap, Shield, Globe, Search, Lock } from 'lucide-react';
+import { Terminal as TerminalIcon, ChevronRight, Zap, Shield, Globe, Lock } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { supabase } from '../supabase';
 
 const Terminal = () => {
   const [history, setHistory] = useState<string[]>([
-    'CyberCord OS v1.0.4 - Initializing...',
+    'CyberCord OS v2.0.0 - Initializing...',
     'Secure connection established to node_0x4f2...',
     'Type "help" for a list of available commands.',
   ]);
   const [input, setInput] = useState('');
+  const [running, setRunning] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -18,34 +20,116 @@ const Terminal = () => {
     }
   }, [history]);
 
-  const handleCommand = (cmd: string) => {
-    const c = cmd.toLowerCase().trim();
-    let response = '';
+  const addLines = (...lines: string[]) => setHistory(prev => [...prev, ...lines]);
 
-    switch (c) {
-      case 'help':
-        response = 'Available commands: help, clear, scan <target>, whois <domain>, status, version';
-        break;
-      case 'clear':
-        setHistory([]);
-        return;
-      case 'status':
-        response = 'SYSTEM: ONLINE | NODES: 102 | LATENCY: 24ms | AUTH: AGENT_001';
-        break;
-      case 'version':
-        response = 'CyberCord Core v1.0.4 (Build 2026.04.02)';
-        break;
-      default:
-        if (c.startsWith('scan ')) {
-          response = `Initializing deep scan for ${c.split(' ')[1]}... [DONE] Results synced to dashboard.`;
-        } else if (c.startsWith('whois ')) {
-          response = `Querying WHOIS database for ${c.split(' ')[1]}... [SUCCESS] Data retrieved.`;
-        } else {
-          response = `Command not found: ${c}. Type "help" for assistance.`;
+  const handleCommand = async (cmd: string) => {
+    const c = cmd.trim();
+    const lower = c.toLowerCase();
+
+    if (!c) return;
+    addLines(`> ${c}`);
+
+    if (lower === 'clear') { setHistory([]); return; }
+    if (lower === 'help') {
+      addLines(
+        'Available commands:',
+        '  help                   Show this help message',
+        '  clear                  Clear the terminal',
+        '  status                 Show system status',
+        '  version                Show version info',
+        '  scan <target>          Run full domain/IP analysis',
+        '  whois <domain>         WHOIS lookup for a domain',
+        '  dns <domain>           DNS records lookup',
+        '  ssl <domain>           SSL certificate check',
+        '  headers <domain>       Analyze HTTP security headers',
+        '  blacklist <ip/domain>  Check blacklist status',
+        '  ip <address>           IP geolocation lookup',
+      );
+      return;
+    }
+    if (lower === 'status') { addLines('SYSTEM: ONLINE | NODES: 102 | LATENCY: 24ms | AUTH: VERIFIED'); return; }
+    if (lower === 'version') { addLines('CyberCord Enterprise v2.0.0 (Build 2026.04.02)'); return; }
+
+    const parts = c.split(/\s+/);
+    const command = parts[0].toLowerCase();
+    const target = parts.slice(1).join(' ');
+
+    const TOOL_COMMANDS: Record<string, string> = {
+      scan: 'domain-full', whois: 'whois', dns: 'dnsdumpster',
+      ssl: 'ssl-checker', headers: 'headers', blacklist: 'blacklist', ip: 'ip-lookup',
+    };
+
+    if (TOOL_COMMANDS[command]) {
+      if (!target) { addLines(`Usage: ${command} <target>`); return; }
+      setRunning(true);
+      addLines(`[*] Running ${command.toUpperCase()} analysis for ${target}...`);
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const idToken = session?.access_token;
+        if (!idToken) { addLines('[!] Not authenticated. Please log in first.'); setRunning(false); return; }
+
+        const res = await fetch('/api/run-tool', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+          body: JSON.stringify({ toolId: TOOL_COMMANDS[command], target }),
+        });
+        const result = await res.json();
+        if (!res.ok) { addLines(`[!] Error: ${result.error}`); setRunning(false); return; }
+
+        const d = result.data;
+        addLines(`[+] ${result.reportType} completed for: ${target}`);
+
+        if (command === 'whois') {
+          if (d.registrar) addLines(`    Registrar: ${d.registrar}`);
+          if (d.creationDate || d.createdDate) addLines(`    Created: ${d.creationDate || d.createdDate}`);
+          if (d.expirationDate || d.expiryDate) addLines(`    Expires: ${d.expirationDate || d.expiryDate}`);
+          if (d.registrantCountry) addLines(`    Country: ${d.registrantCountry}`);
+        } else if (command === 'dns') {
+          if (d.a_records?.length) addLines(`    A:   ${d.a_records.join(', ')}`);
+          if (d.ns_records?.length) addLines(`    NS:  ${d.ns_records.join(', ')}`);
+          if (d.mx_records?.length) addLines(`    MX:  ${d.mx_records.map((m: any) => m.exchange).join(', ')}`);
+          addLines(`    SPF: ${d.spf_valid ? 'VALID' : 'MISSING'} | DMARC: ${d.dmarc_valid ? 'VALID' : 'MISSING'}`);
+        } else if (command === 'ssl') {
+          if (d.error) { addLines(`    [!] ${d.error}`); }
+          else {
+            addLines(`    Status: ${d.expired ? 'EXPIRED!' : `Valid (${d.days_remaining} days remaining)`}`);
+            addLines(`    Issuer: ${d.issuer?.O || 'Unknown'}`);
+            addLines(`    Protocol: ${d.protocol || 'Unknown'}`);
+          }
+        } else if (command === 'headers') {
+          const sh = d.security_headers || {};
+          addLines(`    Server: ${d.server || 'Unknown'} | Security Score: ${d.headers_score || 0}%`);
+          const checks = ['Content-Security-Policy','Strict-Transport-Security','X-Frame-Options','X-Content-Type-Options'];
+          checks.forEach(h => addLines(`    ${h.padEnd(32)}: ${sh[h]?.present ? 'SET' : 'MISSING'}`));
+        } else if (command === 'blacklist') {
+          const bl = d.blacklists || [];
+          const listed = bl.filter((b: any) => b.status === 'LISTED');
+          addLines(`    Listed: ${listed.length}/${bl.length} blacklists`);
+          if (listed.length > 0) listed.forEach((b: any) => addLines(`    [!] LISTED on ${b.name}`));
+          else addLines('    [+] Clean on all blacklists');
+        } else if (command === 'ip') {
+          const g = d.geolocation || d;
+          addLines(`    IP: ${g.query || target}`);
+          addLines(`    Location: ${[g.city, g.regionName, g.country].filter(Boolean).join(', ')}`);
+          addLines(`    ISP: ${g.isp || 'Unknown'}`);
+          addLines(`    Proxy/Hosting: ${g.proxy || g.hosting ? 'YES' : 'NO'}`);
+        } else if (command === 'scan') {
+          const rsk = d.risk_score;
+          if (rsk) addLines(`    Risk Score: ${rsk.overall_score}/100 (${rsk.risk_level})`);
+          if (d.dns?.a_records?.length) addLines(`    A Records: ${d.dns.a_records.join(', ')}`);
+          if (d.ssl) addLines(`    SSL: ${d.ssl.expired ? 'EXPIRED' : `Valid (${d.ssl.days_remaining}d)`}`);
+          if (rsk?.recommendations?.length) addLines(`    Recommendations: ${rsk.recommendations.length} issues found`);
         }
+        addLines('[✓] Analysis complete. Results synced to dashboard.');
+      } catch (e: any) {
+        addLines(`[!] Error: ${e.message}`);
+      } finally {
+        setRunning(false);
+      }
+      return;
     }
 
-    setHistory(prev => [...prev, `> ${cmd}`, response]);
+    addLines(`Command not found: ${c}. Type "help" for assistance.`);
   };
 
   return (
@@ -77,7 +161,9 @@ const Terminal = () => {
           {history.map((line, idx) => (
             <div key={idx} className={cn(
               line.startsWith('>') ? "text-white font-bold" : "",
-              line.includes('[SUCCESS]') || line.includes('[DONE]') ? "text-emerald-500" : "",
+              line.includes('[✓]') || line.includes('[+]') ? "text-emerald-500" : "",
+              line.includes('[!]') ? "text-red-400" : "",
+              line.includes('[*]') ? "text-cyan-400" : "",
               line.includes('SYSTEM:') ? "text-cyan-400" : ""
             )}>
               {line}
@@ -89,6 +175,7 @@ const Terminal = () => {
               type="text"
               autoFocus
               value={input}
+              disabled={running}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
@@ -96,7 +183,8 @@ const Terminal = () => {
                   setInput('');
                 }
               }}
-              className="flex-grow bg-transparent border-none outline-none focus:ring-0 p-0 text-sm"
+              className="flex-grow bg-transparent border-none outline-none focus:ring-0 p-0 text-sm disabled:opacity-50"
+              placeholder={running ? 'Running...' : ''}
             />
           </div>
         </div>

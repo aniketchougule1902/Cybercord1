@@ -6,7 +6,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 export async function analyzeInvestigation(result: any): Promise<string> {
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.0-flash",
       contents: `Analyze the following OSINT investigation data and provide a concise, professional summary of risks and findings.
       
       Data: ${JSON.stringify(result)}
@@ -24,7 +24,7 @@ export async function analyzeInvestigation(result: any): Promise<string> {
 export async function getCopilotResponse(query: string, context: any): Promise<string> {
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.0-flash",
       contents: `You are CyberCord AI Copilot, an expert OSINT and Cybersecurity assistant.
       Current context: ${JSON.stringify(context)}
       User query: ${query}

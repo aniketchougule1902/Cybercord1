@@ -51,38 +51,46 @@ const ToolResultRenderer = ({ result, target }: { result: ToolResult; target: st
   );
 
   if (reportType === 'IP_INTELLIGENCE') {
+    const geo = data.geolocation || data;
     return (
       <div className="space-y-8">
         {renderSection("Geographic Data", MapPin, (
           <>
-            {renderItem("City", data.city)}
-            {renderItem("Region", data.region_name)}
-            {renderItem("Country", `${data.country_name} (${data.country_code})`)}
-            {renderItem("Coordinates", `${data.latitude}, ${data.longitude}`)}
-            {data.location?.country_flag && (
-              <div className="col-span-full flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/5">
-                <img src={data.location.country_flag} alt="Flag" className="w-8 h-6 rounded shadow-sm" referrerPolicy="no-referrer" />
-                <span className="text-sm font-medium">{data.location.capital} (Capital)</span>
-              </div>
-            )}
+            {renderItem("City", geo.city)}
+            {renderItem("Region", geo.regionName || geo.region)}
+            {renderItem("Country", geo.country ? `${geo.country} (${geo.countryCode})` : 'N/A')}
+            {renderItem("Coordinates", geo.lat != null ? `${geo.lat}, ${geo.lon}` : 'N/A')}
+            {renderItem("Timezone", geo.timezone)}
+            {renderItem("ZIP", geo.zip)}
           </>
         ))}
 
         {renderSection("Network Intelligence", Server, (
           <>
-            {renderItem("IP Type", data.type)}
-            {renderItem("ISP", data.connection?.isp)}
-            {renderItem("ASN", data.connection?.asn)}
-            {renderItem("Routing", data.ip_routing_type)}
+            {renderItem("ISP", geo.isp)}
+            {renderItem("Organization", geo.org)}
+            {renderItem("ASN", geo.as || geo.asname)}
+            {renderItem("Reverse DNS", geo.reverse || (data.ptr_records && data.ptr_records[0]) || 'N/A')}
           </>
         ))}
 
         {renderSection("Security Audit", Shield, (
           <>
-            {renderItem("Proxy", data.security?.is_proxy ? 'YES' : 'NO')}
-            {renderItem("VPN", data.security?.is_vpn ? 'YES' : 'NO')}
-            {renderItem("TOR", data.security?.is_tor ? 'YES' : 'NO')}
-            {renderItem("Threat Level", data.security?.threat_level || 'Low')}
+            {renderItem("Proxy / Hosting", geo.proxy || geo.hosting ? 'YES — Elevated Risk' : 'NO')}
+            {renderItem("Mobile Network", geo.mobile ? 'YES' : 'NO')}
+            {renderItem("Risk Score", data.risk_score != null ? `${data.risk_score}/100` : 'N/A')}
+            {renderItem("Status", geo.status || 'success')}
+          </>
+        ))}
+
+        {data.blacklists && data.blacklists.length > 0 && renderSection("Blacklist Status", ShieldAlert, (
+          <>
+            {data.blacklists.map((bl: any, idx: number) => (
+              <div key={idx} className="p-3 rounded-xl bg-white/5 border border-white/5 flex items-center justify-between">
+                <span className="text-xs font-medium text-gray-400">{bl.name}</span>
+                <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-widest", bl.status === 'CLEAN' ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500")}>{bl.status}</span>
+              </div>
+            ))}
           </>
         ))}
       </div>
@@ -268,49 +276,111 @@ const ToolResultRenderer = ({ result, target }: { result: ToolResult; target: st
   }
 
   if (reportType === 'DNS_RECONNAISSANCE') {
+    const recordSections = [
+      { key: 'a_records', label: 'A Records (IPv4)' },
+      { key: 'aaaa_records', label: 'AAAA Records (IPv6)' },
+      { key: 'mx_records', label: 'MX Records (Mail)' },
+      { key: 'ns_records', label: 'NS Records (Nameserver)' },
+      { key: 'txt_records', label: 'TXT Records' },
+    ];
     return (
-      <div className="space-y-4">
-        <div className="flex items-center gap-2 mb-4">
-          <Activity className="w-5 h-5 text-cyan-500" />
-          <h4 className="font-bold">DNS Records Found</h4>
+      <div className="space-y-6">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {renderItem("SPF", data.spf_valid ? '✓ Valid' : '✗ Missing')}
+          {renderItem("DMARC", data.dmarc_valid ? '✓ Valid' : '✗ Missing')}
+          {renderItem("DKIM", data.dkim_valid ? '✓ Valid' : '✗ Missing')}
+          {renderItem("DNSSEC", data.dnssec ? '✓ Enabled' : '✗ Disabled')}
         </div>
-        <div className="space-y-2">
-          {data.records?.map((record: any, idx: number) => (
-            <div key={idx} className="p-3 rounded-xl bg-white/5 border border-white/5 font-mono text-xs text-cyan-500/80">
-              {JSON.stringify(record)}
+        {recordSections.map(({ key, label }) => {
+          const recs = data[key];
+          if (!recs || (Array.isArray(recs) && recs.length === 0)) return null;
+          return (
+            <div key={key}>
+              <div className="flex items-center gap-2 mb-2">
+                <Activity className="w-4 h-4 text-cyan-500" />
+                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">{label}</span>
+              </div>
+              <div className="space-y-1">
+                {(Array.isArray(recs) ? recs : [recs]).map((rec: any, idx: number) => (
+                  <div key={idx} className="p-3 rounded-xl bg-white/5 border border-white/5 font-mono text-xs text-cyan-500/80">
+                    {typeof rec === 'object' ? JSON.stringify(rec) : String(rec)}
+                  </div>
+                ))}
+              </div>
             </div>
-          ))}
-          {(!data.records || data.records.length === 0) && (
-            <div className="p-8 text-center text-gray-500 italic">No public records found for this target.</div>
-          )}
-        </div>
+          );
+        })}
+        {data.spf && (
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <Shield className="w-4 h-4 text-cyan-500" />
+              <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">SPF Record</span>
+            </div>
+            <div className="p-3 rounded-xl bg-white/5 border border-white/5 font-mono text-xs text-cyan-500/80 break-all">{data.spf}</div>
+          </div>
+        )}
+        {data.dmarc && (
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <Shield className="w-4 h-4 text-cyan-500" />
+              <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">DMARC Record</span>
+            </div>
+            <div className="p-3 rounded-xl bg-white/5 border border-white/5 font-mono text-xs text-cyan-500/80 break-all">{data.dmarc}</div>
+          </div>
+        )}
+        {data.dkim && data.dkim.length > 0 && (
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <Lock className="w-4 h-4 text-cyan-500" />
+              <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">DKIM Selectors Found</span>
+            </div>
+            <div className="space-y-1">
+              {data.dkim.map((d: any, idx: number) => (
+                <div key={idx} className="p-3 rounded-xl bg-white/5 border border-white/5 font-mono text-xs text-cyan-500/80 break-all">
+                  [{d.selector}] {d.record}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {!data.a_records?.length && !data.ns_records?.length && (
+          <div className="p-8 text-center text-gray-500 italic">No public DNS records found for this target.</div>
+        )}
       </div>
     );
   }
 
   if (reportType === 'HTTP_HEADERS_ANALYSIS') {
+    const sh = data.security_headers || {};
+    const securityHeaderKeys = ['Content-Security-Policy', 'Strict-Transport-Security', 'X-Frame-Options', 'X-Content-Type-Options', 'X-XSS-Protection', 'Referrer-Policy', 'Permissions-Policy', 'Cache-Control'];
     return (
       <div className="space-y-8">
         {renderSection("Response Status", Activity, (
           <>
             {renderItem("Status Code", data.status)}
             {renderItem("Status Text", data.statusText)}
+            {renderItem("Server", data.server || 'Unknown')}
+            {renderItem("Security Score", data.headers_score != null ? `${data.headers_score}%` : 'N/A')}
           </>
         ))}
 
         {renderSection("Security Headers", Shield, (
           <>
-            {renderItem("Content-Security-Policy", data.headers?.['content-security-policy'] ? 'SET' : 'MISSING')}
-            {renderItem("Strict-Transport-Security", data.headers?.['strict-transport-security'] ? 'SET' : 'MISSING')}
-            {renderItem("X-Frame-Options", data.headers?.['x-frame-options'] ? 'SET' : 'MISSING')}
-            {renderItem("X-Content-Type-Options", data.headers?.['x-content-type-options'] ? 'SET' : 'MISSING')}
+            {securityHeaderKeys.map(k => (
+              <div key={k} className="p-3 rounded-xl bg-white/5 border border-white/5 flex items-center justify-between gap-2">
+                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest truncate">{k.replace(/-/g,' ')}</span>
+                <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-widest shrink-0", sh[k]?.present ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500")}>
+                  {sh[k]?.present ? 'SET' : 'MISSING'}
+                </span>
+              </div>
+            ))}
           </>
         ))}
 
         <div className="space-y-2">
-          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest px-2">All Headers</label>
+          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest px-2">Security Header Values</label>
           <div className="p-4 rounded-2xl bg-black border border-white/10 font-mono text-xs text-cyan-500/60 max-h-60 overflow-y-auto custom-scrollbar">
-            <pre>{JSON.stringify(data.headers, null, 2)}</pre>
+            <pre>{JSON.stringify(sh, null, 2)}</pre>
           </div>
         </div>
       </div>
@@ -323,17 +393,17 @@ const ToolResultRenderer = ({ result, target }: { result: ToolResult; target: st
         {renderSection("Registration Details", User, (
           <>
             {renderItem("Registrar", data.registrar)}
-            {renderItem("Creation Date", data.creationDate)}
-            {renderItem("Expiration Date", data.expirationDate)}
-            {renderItem("Updated Date", data.updatedDate)}
+            {renderItem("Creation Date", data.creationDate || data.createdDate || data.registrationDate)}
+            {renderItem("Expiration Date", data.expirationDate || data.expiryDate || data.registryExpiryDate)}
+            {renderItem("Updated Date", data.updatedDate || data.updatedAt)}
           </>
         ))}
 
         {renderSection("Registrant Info", Shield, (
           <>
-            {renderItem("Organization", data.registrantOrganization)}
-            {renderItem("Country", data.registrantCountry)}
-            {renderItem("State", data.registrantState)}
+            {renderItem("Organization", data.registrantOrganization || data.org)}
+            {renderItem("Country", data.registrantCountry || data.country)}
+            {renderItem("State", data.registrantState || data.registrantStateProvince)}
             {renderItem("City", data.registrantCity)}
           </>
         ))}
@@ -344,6 +414,293 @@ const ToolResultRenderer = ({ result, target }: { result: ToolResult; target: st
             <pre>{JSON.stringify(data, null, 2)}</pre>
           </div>
         </div>
+      </div>
+    );
+  }
+
+  if (reportType === 'SSL_ANALYSIS') {
+    return (
+      <div className="space-y-8">
+        <div className={cn(
+          "p-6 rounded-3xl border flex items-center gap-4",
+          data.expired ? "bg-red-500/10 border-red-500/30" : data.days_remaining < 30 ? "bg-amber-500/10 border-amber-500/30" : "bg-emerald-500/10 border-emerald-500/30"
+        )}>
+          <Shield className={cn("w-8 h-8", data.expired ? "text-red-500" : data.days_remaining < 30 ? "text-amber-500" : "text-emerald-500")} />
+          <div>
+            <h4 className="font-bold text-white">{data.expired ? 'Certificate EXPIRED' : `Valid for ${data.days_remaining} more days`}</h4>
+            <p className="text-sm text-gray-400">{data.issuer?.O || 'Unknown Issuer'}</p>
+          </div>
+        </div>
+        {renderSection("Certificate Details", Lock, (
+          <>
+            {renderItem("Issued To", data.subject?.CN)}
+            {renderItem("Issued By", data.issuer?.CN)}
+            {renderItem("Valid From", data.valid_from)}
+            {renderItem("Valid To", data.valid_to)}
+            {renderItem("Days Remaining", data.days_remaining)}
+            {renderItem("Self-Signed", data.self_signed ? 'YES — Not Trusted' : 'NO')}
+            {renderItem("Protocol", data.protocol)}
+            {renderItem("Cipher", data.cipher?.name)}
+          </>
+        ))}
+        {data.san && data.san.length > 0 && (
+          <div>
+            <div className="flex items-center gap-2 mb-3"><Globe className="w-4 h-4 text-cyan-500" /><span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Subject Alt Names ({data.san.length})</span></div>
+            <div className="flex flex-wrap gap-2">
+              {data.san.slice(0, 20).map((n: string, i: number) => <span key={i} className="px-2 py-1 bg-cyan-500/10 text-cyan-500 text-[10px] font-mono rounded border border-cyan-500/20">{n}</span>)}
+              {data.san.length > 20 && <span className="px-2 py-1 text-gray-500 text-[10px] font-bold">+{data.san.length - 20} more</span>}
+            </div>
+          </div>
+        )}
+        {data.fingerprint256 && (
+          <div>
+            <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest px-2">SHA-256 Fingerprint</label>
+            <div className="mt-2 p-3 rounded-xl bg-black border border-white/10 font-mono text-[10px] text-cyan-500/60 break-all">{data.fingerprint256}</div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (reportType === 'EMAIL_ANALYSIS') {
+    return (
+      <div className="space-y-8">
+        <div className={cn(
+          "p-6 rounded-3xl border flex items-center gap-4",
+          data.disposable ? "bg-red-500/10 border-red-500/30" : "bg-emerald-500/10 border-emerald-500/30"
+        )}>
+          <Mail className={cn("w-8 h-8", data.disposable ? "text-red-500" : "text-emerald-500")} />
+          <div>
+            <h4 className="font-bold text-white">{data.disposable ? 'Disposable / Throwaway Email' : data.free_provider ? 'Free Email Provider' : 'Corporate / Custom Domain'}</h4>
+            <p className="text-sm text-gray-400">{data.email || data.domain}</p>
+          </div>
+        </div>
+        {renderSection("Validation", Shield, (
+          <>
+            {renderItem("Format Valid", data.format_valid !== false ? 'YES' : 'NO')}
+            {renderItem("MX Records", data.mx_valid ? 'VALID — Can Receive Mail' : 'INVALID — Cannot Receive Mail')}
+            {renderItem("Disposable Domain", data.disposable ? 'YES — Suspicious' : 'NO')}
+            {renderItem("Free Provider", data.free_provider ? 'YES' : 'NO')}
+            {renderItem("Risk Level", data.risk_level || (data.disposable ? 'High' : 'Low'))}
+            {renderItem("Breach Risk Score", data.breach_risk_score != null ? `${data.breach_risk_score}/100` : 'N/A')}
+          </>
+        ))}
+        {renderSection("Email Authentication", Globe, (
+          <>
+            {renderItem("SPF Record", data.spf_valid ? 'VALID' : 'MISSING')}
+            {renderItem("DMARC Policy", data.dmarc_valid ? 'VALID' : 'MISSING')}
+            {renderItem("SPF Value", data.spf_record || 'N/A')}
+          </>
+        ))}
+        {data.mx_records && data.mx_records.length > 0 && (
+          <div>
+            <div className="flex items-center gap-2 mb-3"><Server className="w-4 h-4 text-cyan-500" /><span className="text-xs font-bold text-gray-400 uppercase tracking-wider">MX Records</span></div>
+            <div className="space-y-1">
+              {(data.mx_records as any[]).map((mx: any, i: number) => (
+                <div key={i} className="p-3 rounded-xl bg-white/5 border border-white/5 font-mono text-xs text-cyan-500/80">
+                  Priority {mx.priority}: {mx.exchange}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (reportType === 'SUBDOMAIN_DISCOVERY') {
+    return (
+      <div className="space-y-6">
+        <div className="p-4 rounded-2xl bg-cyan-500/5 border border-cyan-500/10 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Globe className="w-5 h-5 text-cyan-500" />
+            <span className="font-bold text-white">Found {data.count || data.subdomains?.length || 0} Subdomains</span>
+          </div>
+          <span className="text-xs text-gray-500">Target: {data.target}</span>
+        </div>
+        {data.subdomains && data.subdomains.length > 0 ? (
+          <div className="space-y-1 max-h-96 overflow-y-auto custom-scrollbar pr-1">
+            {data.subdomains.map((sub: any, idx: number) => {
+              const name = typeof sub === 'string' ? sub : sub.subdomain;
+              const sources = typeof sub === 'object' && sub.sources ? sub.sources : [];
+              return (
+                <div key={idx} className="p-3 rounded-xl bg-white/5 border border-white/5 flex items-center justify-between">
+                  <span className="font-mono text-xs text-cyan-400">{name}</span>
+                  {sources.length > 0 && <span className="text-[10px] text-gray-600 uppercase tracking-widest">{sources.join(', ')}</span>}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="p-8 text-center text-gray-500 italic">No subdomains discovered for this target.</div>
+        )}
+      </div>
+    );
+  }
+
+  if (reportType === 'DOMAIN_INTELLIGENCE') {
+    const risk = data.risk_score;
+    return (
+      <div className="space-y-8">
+        {risk && (
+          <div className={cn(
+            "p-6 rounded-3xl border flex items-center gap-4",
+            risk.overall_score > 60 ? "bg-red-500/10 border-red-500/30" : risk.overall_score > 30 ? "bg-amber-500/10 border-amber-500/30" : "bg-emerald-500/10 border-emerald-500/30"
+          )}>
+            <ShieldAlert className={cn("w-8 h-8", risk.overall_score > 60 ? "text-red-500" : risk.overall_score > 30 ? "text-amber-500" : "text-emerald-500")} />
+            <div>
+              <h4 className="font-bold text-white">Risk Score: {risk.overall_score}/100 — {risk.risk_level}</h4>
+              <p className="text-sm text-gray-400">{risk.recommendations?.length ? `${risk.recommendations.length} recommendations` : 'No critical issues'}</p>
+            </div>
+          </div>
+        )}
+        {data.dns && renderSection("DNS Summary", Globe, (
+          <>
+            {renderItem("A Records", data.dns.a_records?.join(', ') || 'None')}
+            {renderItem("NS Records", data.dns.ns_records?.join(', ') || 'None')}
+            {renderItem("SPF", data.dns.spf_valid ? '✓ Valid' : '✗ Missing')}
+            {renderItem("DMARC", data.dns.dmarc_valid ? '✓ Valid' : '✗ Missing')}
+          </>
+        ))}
+        {data.ssl && renderSection("SSL Certificate", Lock, (
+          <>
+            {renderItem("Status", data.ssl.expired ? 'EXPIRED' : `Valid (${data.ssl.days_remaining}d remaining)`)}
+            {renderItem("Issuer", data.ssl.issuer?.O)}
+            {renderItem("Protocol", data.ssl.protocol)}
+            {renderItem("Self-Signed", data.ssl.self_signed ? 'YES' : 'NO')}
+          </>
+        ))}
+        {risk?.recommendations?.length > 0 && (
+          <div>
+            <div className="flex items-center gap-2 mb-3"><ShieldAlert className="w-4 h-4 text-amber-500" /><span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Recommendations</span></div>
+            <div className="space-y-1">
+              {risk.recommendations.map((r: string, i: number) => (
+                <div key={i} className="p-3 rounded-xl bg-amber-500/5 border border-amber-500/10 text-xs text-gray-300 flex items-start gap-2">
+                  <span className="text-amber-500 mt-0.5">→</span>{r}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="space-y-2">
+          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest px-2">Raw Report</label>
+          <div className="p-4 rounded-2xl bg-black border border-white/10 font-mono text-xs text-cyan-500/60 max-h-60 overflow-y-auto custom-scrollbar">
+            <pre>{JSON.stringify(data, null, 2)}</pre>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (reportType === 'BREACH_CHECK') {    return (
+      <div className="space-y-6">
+        {data.message && (
+          <div className="p-4 rounded-2xl bg-amber-500/5 border border-amber-500/20 flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-amber-500 shrink-0" />
+            <p className="text-sm text-gray-300">{data.message}</p>
+          </div>
+        )}
+        {data.breaches && data.breaches.length > 0 ? (
+          <>
+            <div className="p-4 rounded-2xl bg-red-500/10 border border-red-500/30 flex items-center gap-3">
+              <Shield className="w-5 h-5 text-red-500" />
+              <span className="font-bold text-red-400">{data.breach_count} breach{data.breach_count !== 1 ? 'es' : ''} found for {data.email}</span>
+            </div>
+            <div className="space-y-3">
+              {data.breaches.map((b: any, i: number) => (
+                <div key={i} className="p-4 rounded-xl bg-white/5 border border-red-500/10">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="font-bold text-red-400">{b.Name || b.name}</h4>
+                    <span className="text-[10px] text-gray-500">{b.BreachDate || b.date}</span>
+                  </div>
+                  <p className="text-xs text-gray-400">{(b.Description || '').replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/gi, ' ').trim()}</p>
+                  {b.DataClasses && <div className="mt-2 flex flex-wrap gap-1">{(Array.isArray(b.DataClasses) ? b.DataClasses : []).map((d: string, di: number) => <span key={di} className="px-2 py-0.5 bg-red-500/10 text-red-400 text-[9px] font-bold rounded uppercase">{d}</span>)}</div>}
+                </div>
+              ))}
+            </div>
+          </>
+        ) : !data.message && (
+          <div className="p-8 text-center rounded-2xl bg-emerald-500/5 border border-emerald-500/20">
+            <Shield className="w-10 h-10 text-emerald-500 mx-auto mb-3" />
+            <h4 className="font-bold text-emerald-400">No Breaches Found</h4>
+            <p className="text-sm text-gray-500 mt-1">{data.email} was not found in any known data breaches.</p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (reportType === 'WAYBACK_ARCHIVE') {
+    return (
+      <div className="space-y-6">
+        <div className="p-4 rounded-2xl bg-cyan-500/5 border border-cyan-500/10 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <History className="w-5 h-5 text-cyan-500" />
+            <span className="font-bold text-white">{data.total_snapshots || 0} Snapshots Found</span>
+          </div>
+          <a href={`https://web.archive.org/web/*/${encodeURIComponent(target)}`} target="_blank" rel="noopener noreferrer" className="text-xs text-cyan-500 hover:underline flex items-center gap-1">View All <ExternalLink className="w-3 h-3" /></a>
+        </div>
+        {data.closest && (
+          <div className="p-4 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between">
+            <div>
+              <p className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">Most Recent Snapshot</p>
+              <p className="text-sm font-mono text-cyan-400">{data.closest.timestamp}</p>
+            </div>
+            <a href={data.closest.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 px-3 py-1.5 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-500 text-[10px] font-bold rounded-xl transition-all border border-cyan-500/20">
+              <ExternalLink className="w-3 h-3" /> Open
+            </a>
+          </div>
+        )}
+        {data.snapshots && data.snapshots.length > 0 && (
+          <div className="space-y-1 max-h-96 overflow-y-auto custom-scrollbar pr-1">
+            {data.snapshots.map((snap: any, idx: number) => (
+              <a key={idx} href={snap.archive_url} target="_blank" rel="noopener noreferrer" className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/5 hover:border-cyan-500/30 transition-all group">
+                <span className="font-mono text-xs text-gray-400 group-hover:text-cyan-400">{snap.timestamp}</span>
+                <div className="flex items-center gap-3">
+                  <span className={cn("text-[10px] font-bold px-1.5 py-0.5 rounded", snap.status === '200' ? "bg-emerald-500/10 text-emerald-500" : "bg-gray-500/10 text-gray-500")}>{snap.status}</span>
+                  <ExternalLink className="w-3 h-3 text-gray-600 group-hover:text-cyan-500" />
+                </div>
+              </a>
+            ))}
+          </div>
+        )}
+        {data.error && <div className="p-4 text-center text-gray-500 italic">{data.error}</div>}
+      </div>
+    );
+  }
+
+  if (reportType === 'SECRET_SCAN') {
+    return (
+      <div className="space-y-6">
+        <div className="p-4 rounded-2xl bg-amber-500/5 border border-amber-500/20 flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-amber-500 shrink-0" />
+          <p className="text-sm text-gray-300">{data.note}</p>
+        </div>
+        {data.error && (
+          <div className="p-4 rounded-2xl bg-red-500/5 border border-red-500/20 text-sm text-red-400">{data.error}</div>
+        )}
+        {data.repos && data.repos.length > 0 && (
+          <div>
+            <div className="flex items-center gap-2 mb-3"><Database className="w-4 h-4 text-cyan-500" /><span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Public Repositories ({data.repos.length})</span></div>
+            <div className="space-y-2">
+              {data.repos.map((r: any, i: number) => (
+                <a key={i} href={r.url} target="_blank" rel="noopener noreferrer" className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/5 hover:border-cyan-500/30 transition-all group">
+                  <span className="text-sm font-medium text-gray-300 group-hover:text-cyan-400">{r.name}</span>
+                  <div className="flex items-center gap-2">
+                    {r.language && <span className="text-[10px] text-gray-500">{r.language}</span>}
+                    <ExternalLink className="w-3 h-3 text-gray-600 group-hover:text-cyan-500" />
+                  </div>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+        {data.patterns_checked && (
+          <div>
+            <div className="flex items-center gap-2 mb-3"><Lock className="w-4 h-4 text-cyan-500" /><span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Patterns Checked</span></div>
+            <div className="flex flex-wrap gap-2">{data.patterns_checked.map((p: string, i: number) => <span key={i} className="px-2 py-1 bg-white/5 text-gray-400 text-[10px] font-mono rounded border border-white/5">{p}</span>)}</div>
+          </div>
+        )}
       </div>
     );
   }
@@ -376,19 +733,24 @@ const TOOLS: Tool[] = ([
   { id: 'whois', name: 'Whois Lookup', category: 'Infrastructure', description: 'Domain ownership and registration details.', icon: User, risk: 'Low', status: 'Working' },
   { id: 'builtwith', name: 'BuiltWith', category: 'Infrastructure', description: 'Web technology profiler and lookup.', icon: Cpu, risk: 'Low', status: 'Working' },
   { id: 'headers', name: 'HTTP Headers', category: 'Infrastructure', description: 'Analyze security headers and server technology.', icon: Shield, risk: 'Low', status: 'Working' },
+  { id: 'ssl-checker', name: 'SSL Checker', category: 'Infrastructure', description: 'Analyze SSL/TLS certificate details and validity.', icon: Lock, risk: 'Low', status: 'Working' },
   { id: 'shodan', name: 'Shodan', category: 'Network', description: 'Search for internet-connected devices and vulnerabilities.', icon: Network, risk: 'Medium', status: 'Working' },
   { id: 'censys', name: 'Censys', category: 'Network', description: 'Search engine for internet-connected hosts and certificates.', icon: Eye, risk: 'Medium', status: 'Working' },
-  { id: 'ip-lookup', name: 'IPStack Intelligence', category: 'Network', description: 'Real-time IP geolocation and security data.', icon: Globe, risk: 'Low', status: 'Working' },
+  { id: 'ip-lookup', name: 'IP Intelligence', category: 'Network', description: 'Real-time IP geolocation and network data.', icon: Globe, risk: 'Low', status: 'Working' },
+  { id: 'blacklist', name: 'Blacklist Check', category: 'Security', description: 'Check if IP or domain is listed on spam blacklists.', icon: ShieldAlert, risk: 'Low', status: 'Working' },
+  { id: 'email-analysis', name: 'Email Analysis', category: 'Identity', description: 'Validate email address and analyze domain reputation.', icon: Mail, risk: 'Low', status: 'Working' },
+  { id: 'subdomain-finder', name: 'Subdomain Finder', category: 'Infrastructure', description: 'Discover subdomains using certificate transparency logs.', icon: Search, risk: 'Low', status: 'Working' },
+  { id: 'domain-full', name: 'Domain Full Scan', category: 'Infrastructure', description: 'Comprehensive domain analysis: DNS, SSL, WHOIS, headers, blacklists.', icon: Globe, risk: 'Medium', status: 'Working' },
   { id: 'numverify', name: 'NumVerify', category: 'Identity', description: 'Global phone number validation and lookup.', icon: Smartphone, risk: 'Low', status: 'Working' },
   { id: 'truecaller', name: 'Truecaller OSINT', category: 'Identity', description: 'Search caller ID and spam protection data.', icon: Smartphone, risk: 'Medium', status: 'Working' },
   { id: 'eyecon', name: 'Eyecon Lookup', category: 'Identity', description: 'Identify unknown callers and social profiles.', icon: Eye, risk: 'Medium', status: 'Working' },
   { id: 'phoneinfoga', name: 'PhoneInfoga', category: 'Identity', description: 'Advanced information gathering for phone numbers.', icon: Smartphone, risk: 'Medium', status: 'Working' },
-  { id: 'hibp', name: 'Have I Been Pwned', category: 'Security', description: 'Check if email or phone is in a data breach.', icon: Shield, risk: 'Low', status: 'Not Working' },
-  { id: 'amass', name: 'OWASP Amass', category: 'Infrastructure', description: 'In-depth attack surface mapping and asset discovery.', icon: Database, risk: 'Medium', status: 'Not Working' },
-  { id: 'trufflehog', name: 'TruffleHog', category: 'Code', description: 'Find leaked secrets and credentials in git repositories.', icon: Lock, risk: 'High', status: 'Not Working' },
-  { id: 'exiftool', name: 'ExifTool', category: 'Media', description: 'Read, write and edit meta information in files.', icon: FileText, risk: 'Low', status: 'Not Working' },
-  { id: 'wayback', name: 'Wayback Machine', category: 'Media', description: 'Explore archived versions of websites.', icon: History, risk: 'Low', status: 'Not Working' },
+  { id: 'wayback', name: 'Wayback Machine', category: 'Media', description: 'Explore archived versions of websites via CDX API.', icon: History, risk: 'Low', status: 'Working' },
+  { id: 'amass', name: 'OWASP Amass', category: 'Infrastructure', description: 'In-depth attack surface mapping and asset discovery.', icon: Database, risk: 'Medium', status: 'Working' },
   { id: 'social-analyzer', name: 'Social Analyzer', category: 'Social', description: 'Analyze profiles across 1000+ social media sites.', icon: Users, risk: 'Medium', status: 'Working' },
+  { id: 'hibp', name: 'Have I Been Pwned', category: 'Security', description: 'Check if email is in a data breach (requires HIBP API key).', icon: Shield, risk: 'Low', status: 'Working' },
+  { id: 'trufflehog', name: 'TruffleHog', category: 'Code', description: 'Find leaked secrets and credentials in git repositories.', icon: Lock, risk: 'High', status: 'Working' },
+  { id: 'exiftool', name: 'ExifTool', category: 'Media', description: 'Read, write and edit meta information in files.', icon: FileText, risk: 'Low', status: 'Not Working' },
 ] as Tool[]).sort((a, b) => {
   if (a.status === 'Working' && b.status === 'Not Working') return -1;
   if (a.status === 'Not Working' && b.status === 'Working') return 1;
