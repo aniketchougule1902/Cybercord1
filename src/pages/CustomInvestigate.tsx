@@ -613,7 +613,7 @@ const ToolResultRenderer = ({ result, target }: { result: ToolResult; target: st
                     <h4 className="font-bold text-red-400">{b.Name || b.name}</h4>
                     <span className="text-[10px] text-gray-500">{b.BreachDate || b.date}</span>
                   </div>
-                  <p className="text-xs text-gray-400">{b.Description?.replace(/<[^>]*>/g,'') || ''}</p>
+                  <p className="text-xs text-gray-400">{(b.Description || '').replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/gi, ' ').trim()}</p>
                   {b.DataClasses && <div className="mt-2 flex flex-wrap gap-1">{(Array.isArray(b.DataClasses) ? b.DataClasses : []).map((d: string, di: number) => <span key={di} className="px-2 py-0.5 bg-red-500/10 text-red-400 text-[9px] font-bold rounded uppercase">{d}</span>)}</div>}
                 </div>
               ))}
@@ -638,7 +638,7 @@ const ToolResultRenderer = ({ result, target }: { result: ToolResult; target: st
             <History className="w-5 h-5 text-cyan-500" />
             <span className="font-bold text-white">{data.total_snapshots || 0} Snapshots Found</span>
           </div>
-          <a href={`https://web.archive.org/web/*/${target}`} target="_blank" rel="noopener noreferrer" className="text-xs text-cyan-500 hover:underline flex items-center gap-1">View All <ExternalLink className="w-3 h-3" /></a>
+          <a href={`https://web.archive.org/web/*/${encodeURIComponent(target)}`} target="_blank" rel="noopener noreferrer" className="text-xs text-cyan-500 hover:underline flex items-center gap-1">View All <ExternalLink className="w-3 h-3" /></a>
         </div>
         {data.closest && (
           <div className="p-4 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between">

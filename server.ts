@@ -411,10 +411,11 @@ async function startServer() {
         case 'wayback':
           reportType = "WAYBACK_ARCHIVE";
           try {
-            const wbRes = await axios.get(`http://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(target)}&output=json&limit=20&fl=timestamp,original,statuscode,mimetype&collapse=digest`, { timeout: 12000 });
+            const wbTarget = encodeURIComponent(target);
+            const wbRes = await axios.get(`http://web.archive.org/cdx/search/cdx?url=${wbTarget}&output=json&limit=20&fl=timestamp,original,statuscode,mimetype&collapse=digest`, { timeout: 12000 });
             const rows = Array.isArray(wbRes.data) ? wbRes.data.slice(1) : [];
-            const snapshots = rows.map((r: string[]) => ({ timestamp: r[0], url: r[1], status: r[2], type: r[3], archive_url: `https://web.archive.org/web/${r[0]}/${r[1]}` }));
-            const availRes = await axios.get(`https://archive.org/wayback/available?url=${encodeURIComponent(target)}`, { timeout: 8000 }).catch(() => null);
+            const snapshots = rows.map((r: string[]) => ({ timestamp: r[0], url: r[1], status: r[2], type: r[3], archive_url: `https://web.archive.org/web/${encodeURIComponent(r[0])}/${encodeURIComponent(r[1])}` }));
+            const availRes = await axios.get(`https://archive.org/wayback/available?url=${wbTarget}`, { timeout: 8000 }).catch(() => null);
             data = { target, total_snapshots: snapshots.length, snapshots, closest: availRes?.data?.archived_snapshots?.closest || null };
           } catch (e: any) { data = { target, error: e.message, snapshots: [] }; }
           break;
@@ -439,7 +440,9 @@ async function startServer() {
         case 'trufflehog':
           reportType = "SECRET_SCAN";
           try {
-            const ghApiUrl = `https://api.github.com/users/${target}/repos?per_page=5&sort=updated&type=public`;
+            const ghUsername = target.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 39);
+            if (!ghUsername) throw new Error('Invalid GitHub username format.');
+            const ghApiUrl = `https://api.github.com/users/${ghUsername}/repos?per_page=5&sort=updated&type=public`;
             const ghRes = await axios.get(ghApiUrl, { timeout: 8000, headers: { 'User-Agent': 'CybercordBot/2.0', 'Accept': 'application/vnd.github.v3+json' } });
             const repos = Array.isArray(ghRes.data) ? ghRes.data : [];
             const commonSecretPatterns = [
@@ -460,7 +463,10 @@ async function startServer() {
           break;
         case 'email-analysis':
           reportType = "EMAIL_ANALYSIS";
-          const eDomain = target.includes('@') ? target.split('@')[1] : target;
+          const eDomain = (target.includes('@') ? target.split('@')[1] : target).replace(/[^a-zA-Z0-9.-]/g, '').toLowerCase();
+          if (!eDomain || !/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/.test(eDomain)) {
+            data = { error: 'Invalid domain format', domain: eDomain }; break;
+          }
           const [eMxR, eSpfR, eDmarcR] = await Promise.allSettled([
             resolveMx(eDomain),
             resolveTxt(eDomain).then((recs: string[][]) => recs.map(r => r.join('')).find(t => t.startsWith('v=spf1')) || null),
