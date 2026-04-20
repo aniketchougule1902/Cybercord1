@@ -623,26 +623,31 @@ async function startServer() {
       } else if (type === 'USERNAME') {
         const safeUsername = query.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 50);
         if (!safeUsername) return res.status(400).json({ error: 'Invalid username format' });
-        const platforms = [
-          { name: 'GitHub', url: new URL(`//${safeUsername}`, 'https://github.com').toString() },
-          { name: 'Twitter/X', url: new URL(`//${safeUsername}`, 'https://twitter.com').toString() },
-          { name: 'Instagram', url: new URL(`//${safeUsername}`, 'https://instagram.com').toString() },
-          { name: 'Reddit', url: new URL(`//user/${safeUsername}`, 'https://reddit.com').toString() },
-          { name: 'YouTube', url: new URL(`//@${safeUsername}`, 'https://youtube.com').toString() },
-          { name: 'GitLab', url: new URL(`//${safeUsername}`, 'https://gitlab.com').toString() },
-          { name: 'TikTok', url: new URL(`//@${safeUsername}`, 'https://tiktok.com').toString() },
-          { name: 'Steam', url: new URL(`//id/${safeUsername}`, 'https://steamcommunity.com').toString() },
-          { name: 'Twitch', url: new URL(`//${safeUsername}`, 'https://twitch.tv').toString() },
-          { name: 'Medium', url: new URL(`//@${safeUsername}`, 'https://medium.com').toString() },
+        // Each platform uses a known fixed base URL; only pathname is user-influenced (sanitized)
+        const SOCIAL_PLATFORMS: Array<{ name: string; base: string; pathFn: (u: string) => string }> = [
+          { name: 'GitHub',    base: 'https://github.com',          pathFn: u => `/${u}` },
+          { name: 'Twitter/X', base: 'https://twitter.com',         pathFn: u => `/${u}` },
+          { name: 'Instagram', base: 'https://instagram.com',       pathFn: u => `/${u}` },
+          { name: 'Reddit',    base: 'https://reddit.com',          pathFn: u => `/user/${u}` },
+          { name: 'YouTube',   base: 'https://youtube.com',         pathFn: u => `/@${u}` },
+          { name: 'GitLab',    base: 'https://gitlab.com',          pathFn: u => `/${u}` },
+          { name: 'TikTok',    base: 'https://tiktok.com',          pathFn: u => `/@${u}` },
+          { name: 'Steam',     base: 'https://steamcommunity.com',  pathFn: u => `/id/${u}` },
+          { name: 'Twitch',    base: 'https://twitch.tv',           pathFn: u => `/${u}` },
+          { name: 'Medium',    base: 'https://medium.com',          pathFn: u => `/@${u}` },
         ];
-        const socialResults = await Promise.all(platforms.map(async (p) => {
+        const socialResults = await Promise.all(SOCIAL_PLATFORMS.map(async ({ name, base, pathFn }) => {
+          // Construct URL: host comes from hardcoded `base`, only path is user-influenced
+          const urlObj = new URL(base);
+          urlObj.pathname = pathFn(safeUsername);
+          const profileUrl = urlObj.toString();
           try {
-            const r = await axios.get(p.url, { timeout: 5000, maxRedirects: 3, validateStatus: (s) => s < 500, headers: { 'User-Agent': 'Mozilla/5.0' } });
+            const r = await axios.get(profileUrl, { timeout: 5000, maxRedirects: 3, validateStatus: (s: number) => s < 500, headers: { 'User-Agent': 'Mozilla/5.0' } });
             const body = (r.data?.toString() || '').toLowerCase();
             const notFound = ['not found','page not found','user not found',"this account doesn","nobody on reddit","could not be found","no such user"];
-            if (r.status === 404 || notFound.some(pat => body.includes(pat))) return { platform: p.name, status: 'NOT_FOUND', url: p.url };
-            return { platform: p.name, status: 'FOUND', url: p.url };
-          } catch { return { platform: p.name, status: 'NOT_FOUND', url: p.url }; }
+            if (r.status === 404 || notFound.some(pat => body.includes(pat))) return { platform: name, status: 'NOT_FOUND', url: profileUrl };
+            return { platform: name, status: 'FOUND', url: profileUrl };
+          } catch { return { platform: name, status: 'NOT_FOUND', url: profileUrl }; }
         }));
         rawData = { username: query, results: socialResults };
         const found = socialResults.filter(r => r.status === 'FOUND');
