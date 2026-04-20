@@ -1,8 +1,8 @@
 /// <reference types="vite/client" />
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://tkdbonrhwhimcdrsfpnz.supabase.co';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_5vV044_nCzJddglTX5X1Sw_H8Cp7ff6';
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://valskfspcyfrnllojahy.supabase.co';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZhbHNrZnNwY3lmcm5sbG9qYWh5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY1ODA1ODIsImV4cCI6MjA5MjE1NjU4Mn0.dFD9Srkao8drf4VgIOP1VuD67KhaOEUvYO_d_7aBOuM';
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
