@@ -64,12 +64,13 @@ CREATE TRIGGER users_set_updated_at
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
 BEGIN
-  INSERT INTO public.users (id, email, full_name, avatar_url)
+  INSERT INTO public.users (id, email, full_name, avatar_url, organization)
   VALUES (
     NEW.id,
     NEW.email,
     COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.raw_user_meta_data->>'name'),
-    NEW.raw_user_meta_data->>'avatar_url'
+    NEW.raw_user_meta_data->>'avatar_url',
+    NEW.raw_user_meta_data->>'organization'
   )
   ON CONFLICT (id) DO NOTHING;
   RETURN NEW;
@@ -131,7 +132,8 @@ CREATE TABLE IF NOT EXISTS public.investigations (
   id            UUID        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id       UUID        REFERENCES auth.users(id) ON DELETE CASCADE,
   query         TEXT        NOT NULL,
-  type          TEXT        NOT NULL,
+  type          TEXT        NOT NULL
+                            CHECK (type IN ('USER','DOMAIN','IP','EMAIL','PHONE','USERNAME','ORGANIZATION','BREACH')),
   status        TEXT        NOT NULL DEFAULT 'pending'
                             CHECK (status IN ('pending', 'running', 'completed', 'failed')),
   risk_score    INT         CHECK (risk_score >= 0 AND risk_score <= 100),
@@ -200,6 +202,10 @@ CREATE POLICY "Users can update own profile"
   ON public.users FOR UPDATE
   USING (auth.uid() = id);
 
+CREATE POLICY "Users can delete own profile"
+  ON public.users FOR DELETE
+  USING (auth.uid() = id);
+
 CREATE POLICY "Admins can view all profiles"
   ON public.users FOR SELECT
   USING (public.is_admin());
@@ -232,6 +238,14 @@ CREATE POLICY "Users can update own investigations"
   ON public.investigations FOR UPDATE
   USING (auth.uid() = user_id);
 
+CREATE POLICY "Users can delete own investigations"
+  ON public.investigations FOR DELETE
+  USING (auth.uid() = user_id);
+
 CREATE POLICY "Admins can view all investigations"
   ON public.investigations FOR SELECT
+  USING (public.is_admin());
+
+CREATE POLICY "Admins can delete any investigation"
+  ON public.investigations FOR DELETE
   USING (public.is_admin());
