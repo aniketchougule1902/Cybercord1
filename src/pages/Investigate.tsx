@@ -7,7 +7,6 @@ import { EntityType, InvestigationResult, InvestigationEvent } from '../types';
 import { format } from 'date-fns';
 import InvestigationFlow from '../components/InvestigationFlow';
 import { supabase } from '../supabase';
-import { analyzeInvestigation } from '../services/gemini';
 
 const Investigate = () => {
   const [query, setQuery] = useState('');
@@ -69,50 +68,36 @@ const Investigate = () => {
         body: JSON.stringify({ query, type }),
       });
       
-      const apiData = await response.json();
-      
-      // 3. Process Results & AI Analysis
-      const riskScore = Math.floor(Math.random() * 100);
-      const entities = [
-        { id: '1', type: EntityType.DOMAIN, label: query, data: {} },
-        { id: '2', type: EntityType.IP, label: '1.2.3.4', data: {} },
-        { id: '3', type: EntityType.BREACH, label: 'Adobe 2013', data: {} },
-      ];
-      const relationships = [
-        { id: 'r1', source: '1', target: '2', label: 'resolves to' },
-        { id: 'r2', source: '1', target: '3', label: 'found in' },
-      ];
-      const timeline: InvestigationEvent[] = [
-        { id: 'e1', timestamp: new Date().toISOString(), title: 'Investigation Started', description: `Target: ${query}`, type: 'info' },
-        { id: 'e2', timestamp: new Date().toISOString(), title: 'DNS Resolution', description: 'Resolved to 1.2.3.4', type: 'success' },
-        { id: 'e3', timestamp: new Date().toISOString(), title: 'Breach Detected', description: 'Associated with Adobe 2013 leak', type: 'danger' },
-      ];
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || 'Investigation failed');
+      }
 
-      const aiSummary = await analyzeInvestigation({ query, type, apiData, riskScore });
+      const apiData = await response.json();
 
       const finalResult: InvestigationResult = {
         id: investigationId,
         query: query,
         type: type,
         status: 'completed',
-        riskScore,
-        entities,
-        relationships,
-        timeline,
-        summary: aiSummary,
+        riskScore: apiData.riskScore ?? 0,
+        entities: apiData.entities ?? [],
+        relationships: apiData.relationships ?? [],
+        timeline: (apiData.timeline ?? []) as InvestigationEvent[],
+        summary: apiData.summary ?? 'Investigation complete.',
         createdAt: new Date().toISOString(),
       };
 
-      // 4. Update Supabase
+      // 3. Update Supabase
       await supabase
         .from('investigations')
         .update({
           status: 'completed',
-          risk_score: riskScore,
-          summary: aiSummary,
-          entities: entities,
-          relationships: relationships,
-          timeline: timeline
+          risk_score: finalResult.riskScore,
+          summary: finalResult.summary,
+          entities: finalResult.entities,
+          relationships: finalResult.relationships,
+          timeline: finalResult.timeline
         })
         .eq('id', investigationId);
 
@@ -250,7 +235,7 @@ const Investigate = () => {
                    </div>
                    <div className="flex items-center gap-2">
                       <AlertCircle className="w-4 h-4 text-amber-500" />
-                      <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">3 Potential Risks</span>
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">{result.timeline.filter(e => e.type === 'danger' || e.type === 'warning').length} Potential Risks</span>
                    </div>
                    <div className="flex items-center gap-2">
                       <Clock className="w-4 h-4 text-gray-500" />
@@ -351,7 +336,7 @@ const Investigate = () => {
                     <div key={event.id} className="relative pl-10 sm:pl-16">
                       <div className={cn(
                         "absolute left-2 sm:left-4 top-1.5 w-4 h-4 rounded-full border-4 border-[#050505] z-10",
-                        event.type === 'danger' ? 'bg-red-500' : event.type === 'success' ? 'bg-emerald-500' : 'bg-cyan-500'
+                        event.type === 'danger' ? 'bg-red-500' : event.type === 'success' ? 'bg-emerald-500' : event.type === 'warning' ? 'bg-amber-500' : 'bg-cyan-500'
                       )} />
                       <div className="p-6 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">

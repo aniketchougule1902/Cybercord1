@@ -408,12 +408,50 @@ async function startServer() {
           const blR2 = await checkBlacklists(target);
           data = { target, blacklists: blR2, listed_count: blR2.filter((b: any) => b.status === 'LISTED').length };
           break;
-        case 'subdomain-finder': case 'subdomains':
+        case 'wayback':
+          reportType = "WAYBACK_ARCHIVE";
+          try {
+            const wbRes = await axios.get(`http://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(target)}&output=json&limit=20&fl=timestamp,original,statuscode,mimetype&collapse=digest`, { timeout: 12000 });
+            const rows = Array.isArray(wbRes.data) ? wbRes.data.slice(1) : [];
+            const snapshots = rows.map((r: string[]) => ({ timestamp: r[0], url: r[1], status: r[2], type: r[3], archive_url: `https://web.archive.org/web/${r[0]}/${r[1]}` }));
+            const availRes = await axios.get(`https://archive.org/wayback/available?url=${encodeURIComponent(target)}`, { timeout: 8000 }).catch(() => null);
+            data = { target, total_snapshots: snapshots.length, snapshots, closest: availRes?.data?.archived_snapshots?.closest || null };
+          } catch (e: any) { data = { target, error: e.message, snapshots: [] }; }
+          break;
+        case 'amass': case 'subdomain-finder': case 'subdomains':
           reportType = "SUBDOMAIN_DISCOVERY";
-          const crtR = await axios.get(`https://crt.sh/?q=%.${target}&output=json`, { timeout: 12000 }).catch(() => ({ data: [] }));
-          const subs = new Set<string>();
-          (Array.isArray(crtR.data) ? crtR.data : []).forEach((e: any) => { if (e.name_value) e.name_value.split('\n').forEach((n: string) => { const c = n.replace('*.','').trim(); if (c && c !== target) subs.add(c); }); });
-          data = { target, subdomains: [...subs].slice(0, 100), count: subs.size };
+          const amassSubdomains = new Map<string, string[]>();
+          try {
+            const crtR2 = await axios.get(`https://crt.sh/?q=%.${target}&output=json`, { timeout: 12000 });
+            if (Array.isArray(crtR2.data)) {
+              crtR2.data.forEach((e: any) => { if (e.name_value) e.name_value.split('\n').forEach((n: string) => { const c = n.replace('*.','').trim().toLowerCase(); if (c && c.endsWith(target) && c !== target) { if (!amassSubdomains.has(c)) amassSubdomains.set(c, ['crt.sh']); }; }); });
+            }
+          } catch { }
+          try {
+            const htR2 = await axios.get(`https://api.hackertarget.com/hostsearch/?q=${target}`, { timeout: 8000 });
+            if (typeof htR2.data === 'string' && !htR2.data.includes('error')) {
+              htR2.data.split('\n').forEach((line: string) => { const [sub] = line.split(','); if (sub && sub.endsWith(target) && sub !== target) { if (!amassSubdomains.has(sub)) amassSubdomains.set(sub, ['hackertarget']); else amassSubdomains.get(sub)?.push('hackertarget'); } });
+            }
+          } catch { }
+          const amassResult = Array.from(amassSubdomains.entries()).map(([subdomain, sources]) => ({ subdomain, sources: [...new Set(sources)] }));
+          data = { target, count: amassResult.length, subdomains: amassResult.slice(0, 100) };
+          break;
+        case 'trufflehog':
+          reportType = "SECRET_SCAN";
+          try {
+            const ghApiUrl = `https://api.github.com/users/${target}/repos?per_page=5&sort=updated&type=public`;
+            const ghRes = await axios.get(ghApiUrl, { timeout: 8000, headers: { 'User-Agent': 'CybercordBot/2.0', 'Accept': 'application/vnd.github.v3+json' } });
+            const repos = Array.isArray(ghRes.data) ? ghRes.data : [];
+            const commonSecretPatterns = [
+              { name: 'AWS Access Key', pattern: 'AKIA[0-9A-Z]{16}' },
+              { name: 'Private Key', pattern: '-----BEGIN (RSA|EC|DSA|OPENSSH) PRIVATE KEY-----' },
+              { name: 'Generic API Key', pattern: '(?i)(api_key|apikey|api-key)[\\s]*[=:][\\s]*["\']?[a-z0-9]{16,}' },
+              { name: 'Password in Config', pattern: '(?i)(password|passwd|pwd)[\\s]*[=:][\\s]*["\'][^"\']+["\']' },
+            ];
+            data = { target, note: 'GitHub public repository scan for common secret patterns', repos: repos.map((r: any) => ({ name: r.full_name, url: r.html_url, updated: r.updated_at, language: r.language })), patterns_checked: commonSecretPatterns.map(p => p.name), instructions: 'For full secret scanning, integrate with the TruffleHog CLI or GitHub secret scanning alerts.' };
+          } catch (e: any) {
+            data = { target, note: 'Could not fetch GitHub repositories. Ensure target is a valid GitHub username or organization.', error: e.response?.status === 404 ? 'User/org not found on GitHub' : e.message };
+          }
           break;
         case 'shodan': case 'censys': case 'ip-lookup':
           reportType = "IP_INTELLIGENCE";
@@ -423,8 +461,18 @@ async function startServer() {
         case 'email-analysis':
           reportType = "EMAIL_ANALYSIS";
           const eDomain = target.includes('@') ? target.split('@')[1] : target;
-          const eMx = await resolveMx(eDomain).catch(() => []);
-          data = { email: target, domain: eDomain, mx_records: eMx, mx_valid: (eMx as any[]).length > 0, disposable: DISPOSABLE_DOMAINS.has(eDomain.toLowerCase()), breach_risk_score: DISPOSABLE_DOMAINS.has(eDomain.toLowerCase()) ? 80 : 30 };
+          const [eMxR, eSpfR, eDmarcR] = await Promise.allSettled([
+            resolveMx(eDomain),
+            resolveTxt(eDomain).then((recs: string[][]) => recs.map(r => r.join('')).find(t => t.startsWith('v=spf1')) || null),
+            resolveTxt(`_dmarc.${eDomain}`).then((recs: string[][]) => recs.map(r => r.join('')).find(t => t.startsWith('v=DMARC1')) || null),
+          ]);
+          const eMx = eMxR.status === 'fulfilled' ? eMxR.value : [];
+          const eSpf = eSpfR.status === 'fulfilled' ? eSpfR.value : null;
+          const eDmarc = eDmarcR.status === 'fulfilled' ? eDmarcR.value : null;
+          const eIsDisposable = DISPOSABLE_DOMAINS.has(eDomain.toLowerCase());
+          const eIsFree = ['gmail.com','yahoo.com','hotmail.com','outlook.com','icloud.com','protonmail.com','live.com','aol.com'].includes(eDomain.toLowerCase());
+          const eRiskScore = eIsDisposable ? 80 : eIsFree ? 35 : (eMx as any[]).length === 0 ? 50 : 20;
+          data = { email: target, domain: eDomain, format_valid: true, mx_records: eMx, mx_valid: (eMx as any[]).length > 0, spf_record: eSpf, spf_valid: !!eSpf, dmarc_record: eDmarc, dmarc_valid: !!eDmarc, disposable: eIsDisposable, free_provider: eIsFree, breach_risk_score: eRiskScore, risk_level: eRiskScore >= 60 ? 'High' : eRiskScore >= 35 ? 'Medium' : 'Low' };
           break;
         case 'hibp':
           reportType = "BREACH_CHECK";
@@ -464,8 +512,129 @@ async function startServer() {
 
   app.post("/api/investigate", authenticate, async (req: any, res: any) => {
     const { type, query } = req.body;
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    res.json({ success: true, data: { input: query, type, timestamp: new Date().toISOString(), raw_results: [] } });
+    if (!query) return res.status(400).json({ error: "Query required" });
+    try {
+      const ts = () => new Date().toISOString();
+      const entities: any[] = [{ id: 'e0', type: type, label: query, data: {} }];
+      const relationships: any[] = [];
+      const timeline: any[] = [{ id: 't0', timestamp: ts(), title: 'Investigation Started', description: `Target: ${query} (${type})`, type: 'info' }];
+      let rawData: any = {};
+      let riskCalcData: any = {};
+
+      if (type === 'DOMAIN') {
+        const [dnsR, whoisR, sslR, headersR, blR] = await Promise.allSettled([
+          analyzeDNS(query), whois(query).catch(() => null), getSSLCertificate(query), analyzeSecurityHeaders(query), checkBlacklists(query)
+        ]);
+        const dnsData = dnsR.status === 'fulfilled' ? dnsR.value : {};
+        const whoisData = whoisR.status === 'fulfilled' ? whoisR.value : null;
+        const sslData = sslR.status === 'fulfilled' ? sslR.value : null;
+        const headersData = headersR.status === 'fulfilled' ? headersR.value : {};
+        const blData = blR.status === 'fulfilled' ? blR.value : [];
+        rawData = { dns: dnsData, whois: whoisData, ssl: sslData, headers: headersData, blacklists: blData };
+        riskCalcData = { ssl: sslData, dns: dnsData, headers: headersData, whoisData, blacklists: blData };
+        if (dnsData.a_records?.length) {
+          const ip = dnsData.a_records[0];
+          entities.push({ id: 'e1', type: 'IP', label: ip, data: {} });
+          relationships.push({ id: 'r0', source: 'e0', target: 'e1', label: 'resolves to' });
+          timeline.push({ id: 't1', timestamp: ts(), title: 'DNS Resolution', description: `Resolved to ${ip}`, type: 'success' });
+        }
+        if (sslData && !sslData.error) {
+          entities.push({ id: 'e2', type: 'SSL', label: sslData.issuer?.O || 'SSL Certificate', data: {} });
+          relationships.push({ id: 'r1', source: 'e0', target: 'e2', label: 'secured by' });
+          timeline.push({ id: 't2', timestamp: ts(), title: 'SSL Certificate Found', description: sslData.expired ? 'Certificate is EXPIRED' : `Valid until ${sslData.valid_to}`, type: sslData.expired ? 'danger' : 'success' });
+        }
+        const listedBls = blData.filter((b: any) => b.status === 'LISTED');
+        if (listedBls.length > 0) {
+          timeline.push({ id: 't3', timestamp: ts(), title: 'Blacklist Hit Detected', description: `Listed on ${listedBls.map((b: any) => b.name).join(', ')}`, type: 'danger' });
+        } else {
+          timeline.push({ id: 't4', timestamp: ts(), title: 'Blacklist Check Passed', description: 'Domain is clean on all checked blacklists', type: 'success' });
+        }
+        if (!dnsData.spf_valid) timeline.push({ id: 't5', timestamp: ts(), title: 'Missing SPF Record', description: 'No SPF email authentication found', type: 'warning' });
+        if (!dnsData.dmarc_valid) timeline.push({ id: 't6', timestamp: ts(), title: 'Missing DMARC Policy', description: 'No DMARC anti-spoofing policy found', type: 'warning' });
+      } else if (type === 'IP') {
+        const [geoR, ptrR, blR] = await Promise.allSettled([
+          axios.get(`http://ip-api.com/json/${query}?fields=status,message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,asname,reverse,mobile,proxy,hosting,query`, { timeout: 8000 }),
+          reverseDns(query).catch(() => []), checkBlacklists(query)
+        ]);
+        const geoData = geoR.status === 'fulfilled' ? geoR.value.data : {};
+        const ptrData = ptrR.status === 'fulfilled' ? ptrR.value : [];
+        const blData = blR.status === 'fulfilled' ? blR.value : [];
+        rawData = { geolocation: geoData, ptr: ptrData, blacklists: blData };
+        riskCalcData = { blacklists: blData };
+        if (geoData.country) {
+          entities.push({ id: 'e1', type: 'GEO', label: `${geoData.city}, ${geoData.country}`, data: {} });
+          relationships.push({ id: 'r0', source: 'e0', target: 'e1', label: 'located in' });
+          timeline.push({ id: 't1', timestamp: ts(), title: 'IP Geolocated', description: `${geoData.city || 'Unknown city'}, ${geoData.regionName || ''}, ${geoData.country} (${geoData.isp})`, type: 'success' });
+        }
+        if (geoData.proxy) timeline.push({ id: 't2', timestamp: ts(), title: 'Proxy/VPN Detected', description: 'IP flagged as proxy or hosting provider', type: 'warning' });
+        const listedBls = blData.filter((b: any) => b.status === 'LISTED');
+        if (listedBls.length > 0) timeline.push({ id: 't3', timestamp: ts(), title: 'Blacklist Hit', description: `Listed on ${listedBls.map((b: any) => b.name).join(', ')}`, type: 'danger' });
+        else timeline.push({ id: 't4', timestamp: ts(), title: 'Blacklist Check Passed', description: 'IP is clean on all checked blacklists', type: 'success' });
+      } else if (type === 'EMAIL') {
+        const domain = query.split('@')[1];
+        const [mxR, spfR, dmarcR] = await Promise.allSettled([
+          resolveMx(domain), resolveTxt(domain).then((r: string[][]) => r.map(x => x.join('')).find(t => t.startsWith('v=spf1')) || null),
+          resolveTxt(`_dmarc.${domain}`).then((r: string[][]) => r.map(x => x.join('')).find(t => t.startsWith('v=DMARC1')) || null),
+        ]);
+        const mx = mxR.status === 'fulfilled' ? mxR.value : [];
+        const spf = spfR.status === 'fulfilled' ? spfR.value : null;
+        const dmarc = dmarcR.status === 'fulfilled' ? dmarcR.value : null;
+        const isDisposable = DISPOSABLE_DOMAINS.has(domain.toLowerCase());
+        const isFree = ['gmail.com','yahoo.com','hotmail.com','outlook.com','icloud.com','protonmail.com','live.com','aol.com'].includes(domain.toLowerCase());
+        rawData = { email: query, domain, mx_records: mx, spf_record: spf, dmarc_record: dmarc, disposable: isDisposable, free_provider: isFree };
+        riskCalcData = { dns: { spf_valid: !!spf, dmarc_valid: !!dmarc, dkim_valid: false, dnssec: false } };
+        entities.push({ id: 'e1', type: 'DOMAIN', label: domain, data: {} });
+        relationships.push({ id: 'r0', source: 'e0', target: 'e1', label: 'belongs to domain' });
+        timeline.push({ id: 't1', timestamp: ts(), title: 'Domain Analyzed', description: `Domain: ${domain} | MX valid: ${(mx as any[]).length > 0} | SPF: ${!!spf} | DMARC: ${!!dmarc}`, type: (mx as any[]).length > 0 ? 'success' : 'warning' });
+        if (isDisposable) timeline.push({ id: 't2', timestamp: ts(), title: 'Disposable Email Detected', description: 'This is a known disposable/throwaway email domain', type: 'danger' });
+      } else if (type === 'PHONE') {
+        try {
+          const phoneNumber = parsePhoneNumberFromString(query);
+          rawData = { number: phoneNumber?.number, country: phoneNumber?.country, type: phoneNumber?.getType() || 'N/A', valid: !!phoneNumber?.isValid() };
+          timeline.push({ id: 't1', timestamp: ts(), title: 'Phone Number Parsed', description: `Country: ${phoneNumber?.country || 'Unknown'} | Type: ${phoneNumber?.getType() || 'Unknown'}`, type: 'success' });
+          entities.push({ id: 'e1', type: 'GEO', label: `Country: ${phoneNumber?.country || 'Unknown'}`, data: {} });
+          relationships.push({ id: 'r0', source: 'e0', target: 'e1', label: 'registered in' });
+        } catch { rawData = { error: 'Invalid phone number' }; }
+      } else if (type === 'USERNAME') {
+        const platforms = [
+          { name: 'GitHub', url: `https://github.com/${query}` }, { name: 'Twitter/X', url: `https://twitter.com/${query}` },
+          { name: 'Instagram', url: `https://instagram.com/${query}` }, { name: 'Reddit', url: `https://reddit.com/user/${query}` },
+          { name: 'YouTube', url: `https://youtube.com/@${query}` }, { name: 'GitLab', url: `https://gitlab.com/${query}` },
+          { name: 'TikTok', url: `https://tiktok.com/@${query}` }, { name: 'Steam', url: `https://steamcommunity.com/id/${query}` },
+          { name: 'Twitch', url: `https://twitch.tv/${query}` }, { name: 'Medium', url: `https://medium.com/@${query}` },
+        ];
+        const socialResults = await Promise.all(platforms.map(async (p) => {
+          try {
+            const r = await axios.get(p.url, { timeout: 5000, maxRedirects: 3, validateStatus: (s) => s < 500, headers: { 'User-Agent': 'Mozilla/5.0' } });
+            const body = (r.data?.toString() || '').toLowerCase();
+            const notFound = ['not found','page not found','user not found',"this account doesn","nobody on reddit","could not be found","no such user"];
+            if (r.status === 404 || notFound.some(pat => body.includes(pat))) return { platform: p.name, status: 'NOT_FOUND', url: p.url };
+            return { platform: p.name, status: 'FOUND', url: p.url };
+          } catch { return { platform: p.name, status: 'NOT_FOUND', url: p.url }; }
+        }));
+        rawData = { username: query, results: socialResults };
+        const found = socialResults.filter(r => r.status === 'FOUND');
+        found.forEach((r, i) => {
+          entities.push({ id: `e${i+1}`, type: 'SOCIAL', label: r.platform, data: { url: r.url } });
+          relationships.push({ id: `r${i}`, source: 'e0', target: `e${i+1}`, label: 'found on' });
+        });
+        if (found.length > 0) timeline.push({ id: 't1', timestamp: ts(), title: 'Social Profiles Found', description: `Active on: ${found.map(r => r.platform).join(', ')}`, type: 'success' });
+        else timeline.push({ id: 't1', timestamp: ts(), title: 'No Social Profiles Found', description: 'Username not found on major platforms', type: 'info' });
+      }
+
+      const riskResult = calculateRiskScore(riskCalcData);
+      const riskScore = riskResult.overall_score;
+      timeline.push({ id: `t_final`, timestamp: ts(), title: 'Investigation Complete', description: `Risk Score: ${riskScore}/100 (${riskResult.risk_level})`, type: riskScore > 60 ? 'danger' : riskScore > 30 ? 'warning' : 'success' });
+
+      let summary = `Investigation complete for **${query}**. Risk score: **${riskScore}/100** (${riskResult.risk_level}).`;
+      try {
+        const aiPrompt = `You are a senior cyber intelligence analyst. Analyze this OSINT investigation data for target "${query}" (type: ${type}).\n\nData: ${JSON.stringify({ rawData, riskScore, riskResult }, null, 2)}\n\nProvide a 3-5 sentence professional intelligence assessment including key findings, risk level, and top recommendations. Use **bold** for important terms.`;
+        const aiResp = await ai.models.generateContent({ model: "gemini-2.0-flash", contents: [{ parts: [{ text: aiPrompt }] }] });
+        if (aiResp.text) summary = aiResp.text;
+      } catch { /* use default summary */ }
+
+      res.json({ entities, relationships, timeline, riskScore, summary, rawData, riskResult });
+    } catch (e: any) { res.status(500).json({ error: e.message || 'Investigation failed' }); }
   });
 
   if (process.env.NODE_ENV !== "production") {
