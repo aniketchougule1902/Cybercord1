@@ -44,13 +44,13 @@ function App() {
         <main className="pt-16">
           <Routes>
             <Route path="/" element={<Landing />} />
-            <Route path="/dashboard" element={user ? <Dashboard /> : <Navigate to="/auth" />} />
-            <Route path="/investigate" element={user ? <Investigate /> : <Navigate to="/auth" />} />
-            <Route path="/custom-investigate" element={user ? <CustomInvestigate /> : <Navigate to="/auth" />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/investigate" element={<Investigate />} />
+            <Route path="/custom-investigate" element={<CustomInvestigate />} />
             <Route path="/pricing" element={<Pricing />} />
-            <Route path="/terminal" element={user ? <Terminal /> : <Navigate to="/auth" />} />
-            <Route path="/admin" element={user ? <AdminDashboard /> : <Navigate to="/auth" />} />
-            <Route path="/auth" element={!user ? <Auth /> : <Navigate to="/dashboard" />} />
+            <Route path="/terminal" element={<Terminal />} />
+            <Route path="/admin" element={<AdminDashboard />} />
+            <Route path="/auth" element={<Auth />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
