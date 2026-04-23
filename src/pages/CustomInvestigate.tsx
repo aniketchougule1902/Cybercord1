@@ -839,7 +839,12 @@ const CustomInvestigate = () => {
         body: JSON.stringify({ toolId: tool.id, target: targetInput, type: detectedType }),
       });
 
-      const data = await response.json();
+      let data: any;
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error(`Server returned an unexpected response (HTTP ${response.status}). Please try again.`);
+      }
       if (!response.ok) throw new Error(data.error || "Execution failed");
       
       setToolResult(data);

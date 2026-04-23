@@ -174,10 +174,38 @@ const authenticate = async (req: any, res: any, next: any) => {
   } catch { res.status(401).json({ error: 'Unauthorized' }); }
 };
 
+// Sanitize a username to safe characters, matching the OSINT lookup pattern
+function sanitizeUsername(username: string): string {
+  return username.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 50);
+}
+
+// Safely stringify a value for body text comparison; returns '' on failure
+function safeBodyText(data: unknown): string {
+  if (typeof data === 'string') return data.toLowerCase();
+  try { return JSON.stringify(data || '').toLowerCase(); } catch { return ''; }
+}
+
+// Patterns that indicate a username does not exist on specific platforms
+const SOCIAL_NOT_FOUND_PATTERNS: Record<string, string[]> = {
+  'GitHub':    ['not found'],
+  'Twitter/X': ["this account doesn", 'page not found'],
+  'Reddit':    ["nobody on reddit goes by that name"],
+  'Steam':     ['the specified profile could not be found'],
+  'HackerNews':['no such user'],
+  'Dev.to':    ['not found'],
+};
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
   app.use(express.json());
+  // Ensure malformed JSON request bodies return a JSON error instead of HTML
+  app.use((err: any, req: any, res: any, next: any) => {
+    if (err.type === 'entity.parse.failed') {
+      return res.status(400).json({ error: 'Invalid JSON in request body' });
+    }
+    next(err);
+  });
 
   app.get("/api/health", (req, res) => res.json({ status: "ok", timestamp: new Date().toISOString(), version: "2.0.0" }));
 
@@ -341,37 +369,55 @@ async function startServer() {
       const getApiKey = (service: string, envVar: string) => userSettings?.[service] || globalKeys?.[service]?.value || process.env[envVar];
       let data: any = {}; let reportType = "";
       switch (toolId) {
-        case 'sherlock': case 'social-analyzer':
+        case 'sherlock': case 'social-analyzer': {
           reportType = "SOCIAL_INTELLIGENCE";
-          const platforms = [
-            { name: 'GitHub', url: `https://github.com/${target}` }, { name: 'Twitter/X', url: `https://twitter.com/${target}` },
-            { name: 'Instagram', url: `https://instagram.com/${target}` }, { name: 'Reddit', url: `https://reddit.com/user/${target}` },
-            { name: 'YouTube', url: `https://youtube.com/@${target}` }, { name: 'LinkedIn', url: `https://linkedin.com/in/${target}` },
-            { name: 'TikTok', url: `https://tiktok.com/@${target}` }, { name: 'Steam', url: `https://steamcommunity.com/id/${target}` },
-            { name: 'Twitch', url: `https://twitch.tv/${target}` }, { name: 'SoundCloud', url: `https://soundcloud.com/${target}` },
-            { name: 'Medium', url: `https://medium.com/@${target}` }, { name: 'Dev.to', url: `https://dev.to/${target}` },
-            { name: 'GitLab', url: `https://gitlab.com/${target}` }, { name: 'Bitbucket', url: `https://bitbucket.org/${target}` },
-            { name: 'Keybase', url: `https://keybase.io/${target}` }, { name: 'Behance', url: `https://behance.net/${target}` },
-            { name: 'Dribbble', url: `https://dribbble.com/${target}` }, { name: 'HackerNews', url: `https://news.ycombinator.com/user?id=${target}` },
-            { name: 'StackOverflow', url: `https://stackoverflow.com/users/${target}` }, { name: 'Kaggle', url: `https://kaggle.com/${target}` },
-            { name: 'DockerHub', url: `https://hub.docker.com/u/${target}` }, { name: 'ProductHunt', url: `https://producthunt.com/@${target}` },
-            { name: 'CodePen', url: `https://codepen.io/${target}` }, { name: 'Replit', url: `https://replit.com/@${target}` },
-            { name: 'Last.fm', url: `https://last.fm/user/${target}` }, { name: 'Letterboxd', url: `https://letterboxd.com/${target}` },
-            { name: 'Chess.com', url: `https://chess.com/member/${target}` }, { name: 'Strava', url: `https://strava.com/athletes/${target}` },
-            { name: 'Duolingo', url: `https://duolingo.com/profile/${target}` }, { name: 'Goodreads', url: `https://goodreads.com/${target}` },
+          const safeUsername = sanitizeUsername(target);
+          if (!safeUsername) { data = { error: 'Invalid username format', username: target, results: [] }; break; }
+          const SHERLOCK_PLATFORMS: Array<{ name: string; base: string; pathFn: (u: string) => string }> = [
+            { name: 'GitHub',        base: 'https://github.com',                pathFn: u => `/${u}` },
+            { name: 'Twitter/X',     base: 'https://twitter.com',               pathFn: u => `/${u}` },
+            { name: 'Instagram',     base: 'https://instagram.com',             pathFn: u => `/${u}` },
+            { name: 'Reddit',        base: 'https://reddit.com',                pathFn: u => `/user/${u}` },
+            { name: 'YouTube',       base: 'https://youtube.com',               pathFn: u => `/@${u}` },
+            { name: 'LinkedIn',      base: 'https://linkedin.com',              pathFn: u => `/in/${u}` },
+            { name: 'TikTok',        base: 'https://tiktok.com',                pathFn: u => `/@${u}` },
+            { name: 'Steam',         base: 'https://steamcommunity.com',        pathFn: u => `/id/${u}` },
+            { name: 'Twitch',        base: 'https://twitch.tv',                 pathFn: u => `/${u}` },
+            { name: 'SoundCloud',    base: 'https://soundcloud.com',            pathFn: u => `/${u}` },
+            { name: 'Medium',        base: 'https://medium.com',                pathFn: u => `/@${u}` },
+            { name: 'Dev.to',        base: 'https://dev.to',                    pathFn: u => `/${u}` },
+            { name: 'GitLab',        base: 'https://gitlab.com',                pathFn: u => `/${u}` },
+            { name: 'Bitbucket',     base: 'https://bitbucket.org',             pathFn: u => `/${u}` },
+            { name: 'Keybase',       base: 'https://keybase.io',                pathFn: u => `/${u}` },
+            { name: 'Behance',       base: 'https://behance.net',               pathFn: u => `/${u}` },
+            { name: 'Dribbble',      base: 'https://dribbble.com',              pathFn: u => `/${u}` },
+            { name: 'Kaggle',        base: 'https://kaggle.com',                pathFn: u => `/${u}` },
+            { name: 'DockerHub',     base: 'https://hub.docker.com',            pathFn: u => `/u/${u}` },
+            { name: 'ProductHunt',   base: 'https://producthunt.com',           pathFn: u => `/@${u}` },
+            { name: 'CodePen',       base: 'https://codepen.io',                pathFn: u => `/${u}` },
+            { name: 'Replit',        base: 'https://replit.com',                pathFn: u => `/@${u}` },
+            { name: 'Last.fm',       base: 'https://last.fm',                   pathFn: u => `/user/${u}` },
+            { name: 'Letterboxd',    base: 'https://letterboxd.com',            pathFn: u => `/${u}` },
+            { name: 'Chess.com',     base: 'https://chess.com',                 pathFn: u => `/member/${u}` },
+            { name: 'Strava',        base: 'https://strava.com',                pathFn: u => `/athletes/${u}` },
+            { name: 'Duolingo',      base: 'https://duolingo.com',              pathFn: u => `/profile/${u}` },
+            { name: 'Goodreads',     base: 'https://goodreads.com',             pathFn: u => `/${u}` },
           ];
-          const results = await Promise.all(platforms.map(async (p) => {
+          const sherlockResults = await Promise.all(SHERLOCK_PLATFORMS.map(async ({ name, base, pathFn }) => {
+            const urlObj = new URL(base);
+            urlObj.pathname = pathFn(safeUsername);
+            const profileUrl = urlObj.toString();
             try {
-              const r = await axios.get(p.url, { timeout: 6000, maxRedirects: 3, validateStatus: (s) => s < 500, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; CybercordBot/2.0)' } });
-              const body = (r.data?.toString() || '').toLowerCase();
-              const notFoundPatterns: Record<string, string[]> = { 'GitHub': ['not found'], 'Twitter/X': ["this account doesn", 'page not found'], 'Reddit': ["nobody on reddit goes by that name"], 'Steam': ['the specified profile could not be found'], 'HackerNews': ['no such user'], 'Dev.to': ['not found'] };
-              const patterns = notFoundPatterns[p.name] || ['not found', 'page not found', 'user not found'];
-              if (r.status === 404 || patterns.some(pat => body.includes(pat))) return { platform: p.name, status: 'NOT_FOUND' };
-              return { platform: p.name, status: 'FOUND', url: p.url };
-            } catch (err: any) { return { platform: p.name, status: err.response?.status === 404 ? 'NOT_FOUND' : 'NOT_FOUND' }; }
+              const r = await axios.get(profileUrl, { timeout: 6000, maxRedirects: 3, validateStatus: (s: number) => s < 500, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; CybercordBot/2.0)' } });
+              const body = safeBodyText(r.data);
+              const patterns = SOCIAL_NOT_FOUND_PATTERNS[name] || ['not found', 'page not found', 'user not found'];
+              if (r.status === 404 || patterns.some(pat => body.includes(pat))) return { platform: name, status: 'NOT_FOUND' };
+              return { platform: name, status: 'FOUND', url: profileUrl };
+            } catch { return { platform: name, status: 'NOT_FOUND' }; }
           }));
-          data = { username: target, results };
+          data = { username: safeUsername, results: sherlockResults };
           break;
+        }
         case 'threat-intel':
           reportType = "THREAT_INTELLIGENCE";
           const blResults = await checkBlacklists(target);
@@ -621,7 +667,7 @@ async function startServer() {
           relationships.push({ id: 'r0', source: 'e0', target: 'e1', label: 'registered in' });
         } catch { rawData = { error: 'Invalid phone number' }; }
       } else if (type === 'USERNAME') {
-        const safeUsername = query.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 50);
+        const safeUsername = sanitizeUsername(query);
         if (!safeUsername) return res.status(400).json({ error: 'Invalid username format' });
         // Each platform uses a known fixed base URL; only pathname is user-influenced (sanitized)
         const SOCIAL_PLATFORMS: Array<{ name: string; base: string; pathFn: (u: string) => string }> = [
@@ -643,7 +689,7 @@ async function startServer() {
           const profileUrl = urlObj.toString();
           try {
             const r = await axios.get(profileUrl, { timeout: 5000, maxRedirects: 3, validateStatus: (s: number) => s < 500, headers: { 'User-Agent': 'Mozilla/5.0' } });
-            const body = (r.data?.toString() || '').toLowerCase();
+            const body = safeBodyText(r.data);
             const notFound = ['not found','page not found','user not found',"this account doesn","nobody on reddit","could not be found","no such user"];
             if (r.status === 404 || notFound.some(pat => body.includes(pat))) return { platform: name, status: 'NOT_FOUND', url: profileUrl };
             return { platform: name, status: 'FOUND', url: profileUrl };
@@ -682,6 +728,13 @@ async function startServer() {
     app.use(express.static(distPath));
     app.get("*", (req, res) => { res.sendFile(path.join(distPath, "index.html")); });
   }
+  // Global error handler — must be registered after all routes and middleware.
+  // Ensures every unhandled Express error returns JSON, never HTML.
+  app.use((err: any, _req: any, res: any, _next: any) => {
+    if (res.headersSent) return;
+    const status = err.status || err.statusCode || 500;
+    res.status(status).json({ error: err.message || 'Internal server error' });
+  });
   app.listen(PORT, "0.0.0.0", () => { console.log(`Cybercord Enterprise v2.0 running on http://localhost:${PORT}`); });
 }
 startServer();
